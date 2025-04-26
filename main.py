@@ -1,4 +1,4 @@
-import argparse, json, logging, os, openai, re, requests
+import argparse, json, logging, os, openai, random, re, asyncio
 from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackContext, filters
@@ -16,37 +16,37 @@ VISION_MODELS = CONFIGURATION.get('vision_models', [])
 VALID_MODELS = CONFIGURATION.get('VALID_MODELS', {})
 
 faq_aar = """
-Anda ialah AI sokongan untuk pemandu AirAsia Ride. Jawab dengan ringkas dan mesra. Guna gaya bahasa "saya" dan "awak". Berikut ialah soalan lazim:
+Anda ialah AI sokongan untuk pemandu AirAsia Ride. Jawab dengan ringkas, sopan dan gunakan "saya" dan "awak". Elakkan jawapan panjang. Berikut FAQ utama:
 
 1. Apa itu DOPQ?
-Drop-off Priority Queue (DOPQ) ialah giliran keutamaan untuk pemandu selepas turunkan penumpang di airport. Jika pemandu kekal dalam zon, mereka dapat DOPQ.
+DOPQ bermaksud giliran keutamaan untuk pemandu selepas hantar penumpang di airport. Pastikan kekal dalam zon 30 minit.
 
 2. Bila insentif dibayar?
-Setiap Rabu, atau selewatnya Khamis jika ada cuti umum.
+Setiap Rabu, atau Khamis jika ada cuti umum.
 
-3. Kenapa tak dapat insentif minggu ini?
-Sebab biasa: tidak cukup trip, ada cancel job, atau laporan pelanggan.
+3. Kenapa tak dapat insentif?
+Mungkin tak cukup trip, cancel trip, incomplete job, atau laporan pelanggan.
 
-4. Bagaimana nak tukar akaun bank?
-Hantar maklumat akaun baru ke team support melalui Telegram/WhatsApp.
+4. Tukar akaun bank?
+Hantar maklumat baru ke team support Telegram atau WhatsApp rasmi.
 
-5. Masalah app atau tak boleh login?
-Pastikan app dikemas kini, guna internet stabil, atau guna fungsi "Lapor Isu" dalam app.
+5. App problem?
+Pastikan app dikemas kini, tutup buka semula, dan guna internet stabil.
 
-6. Nak cuti macam mana?
-Hanya off app. Tapi kalau 14 hari tiada trip, akan dikira tidak aktif.
+6. Cuti macam mana?
+Hanya off app, tak perlu permohonan. Tapi kalau lebih 14 hari tiada trip, dianggap tidak aktif.
 
-7. Akaun kena block, macam mana?
-Hubungi support melalui Telegram/WhatsApp rasmi.
+7. Akaun suspended?
+Hubungi support segera untuk semak status.
 
-8. Dapat job tapi tiada penumpang?
-Hubungi support. Jangan teruskan perjalanan.
+8. Job dapat tapi penumpang tak ada?
+Jangan teruskan perjalanan. Lapor kepada support.
 
-9. Ada komisen ke?
-Ya. Standard 15% dari tambang.
+9. Komisen berapa?
+15% komisen standard dari tambang.
 
-10. Topup eWallet lambat masuk?
-Semak transaksi wallet. Jika tiada, hantar bukti transfer kepada support.
+10. Topup eWallet lambat?
+Semak dalam wallet app. Jika tiada, hantar bukti kepada support.
 """
 
 def get_session_id(func):
@@ -79,13 +79,16 @@ def relay_errors(func):
     return wrapper
 
 def is_salutation(text):
-    return any(greet in text.lower() for greet in ['salam', 'assalamualaikum', 'as salam'])
+    return any(word in text.lower() for word in ['salam', 'assalamualaikum', 'hi', 'hai', 'hello'])
 
 def is_bot_called(text):
     return 'aleeya' in text.lower() or 'admin' in text.lower()
 
 def is_valid_message(text):
     return len(text.split()) > 2 or is_salutation(text) or is_bot_called(text)
+
+def clean_response(text):
+    return re.sub(r'[–—]', '', text).strip()
 
 @relay_errors
 @get_session_id
@@ -104,11 +107,22 @@ async def handle_message(update: Update, context: CallbackContext, session_id):
         return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    await asyncio.sleep(random.uniform(33, 60))  # ⏳ Delay typing 33-60s sebelum balas
+
     session_data = SESSION_DATA[session_id]
     session_data['chat_history'].append({"role": "user", "content": f"{faq_aar}\n\nSoalan: {update.message.text}"})
-    response = await response_from_openai(session_data['model'], session_data['chat_history'], session_data['temperature'], session_data['max_tokens'])
+
+    response = await response_from_openai(
+        session_data['model'],
+        session_data['chat_history'],
+        session_data['temperature'],
+        session_data['max_tokens']
+    )
+
     session_data['chat_history'].append({'role': 'assistant', 'content': response})
-    await update.message.reply_text(response.strip(), parse_mode=ParseMode.MARKDOWN)
+    final_response = clean_response(response)
+
+    await update.message.reply_text(final_response, parse_mode=ParseMode.MARKDOWN)
 
 async def response_from_openai(model, messages, temperature, max_tokens):
     params = {
@@ -120,64 +134,11 @@ async def response_from_openai(model, messages, temperature, max_tokens):
     return openai.chat.completions.create(**params).choices[0].message.content
 
 async def command_start(update: Update, context: CallbackContext):
-    await update.message.reply_text("Hai! 😊 Saya Aleeya. Boleh bantu jawab soalan berkaitan AirAsia Ride.")
-
-@get_session_id
-async def command_reset(update: Update, context: CallbackContext, session_id):
-    SESSION_DATA.pop(session_id, None)
-    await update.message.reply_text("✅ Semua tetapan dan sejarah chat dah dipadam.")
-
-@get_session_id
-async def command_clear(update: Update, context: CallbackContext, session_id):
-    SESSION_DATA[session_id]['chat_history'] = []
-    await update.message.reply_text("✅ Sejarah chat dah kosong!")
-
-@initialize_session_data
-@get_session_id
-async def command_set(update: Update, context: CallbackContext, session_id):
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text("Guna format: /set [setting] [value]")
-        return
-    key, value = args[0].lower(), ' '.join(args[1:])
-    if key == 'openai_api_key':
-        openai.api_key = value
-        await update.message.reply_text("✅ API key dikemas kini.")
-    elif key in ['model', 'temperature', 'max_tokens', 'system_prompt']:
-        SESSION_DATA[session_id][key] = float(value) if key == 'temperature' else int(value) if key == 'max_tokens' else value
-        await update.message.reply_text(f"✅ {key} disimpan.")
-    else:
-        await update.message.reply_text("Setting tak dikenali.")
-
-@get_session_id
-async def command_show(update: Update, context: CallbackContext, session_id):
-    data = SESSION_DATA.get(session_id, {})
-    msg = '\n'.join([f"{k}: {v}" for k, v in data.items() if k != 'chat_history'])
-    await update.message.reply_text(f"📌 Tetapan semasa:\n{msg}")
-
-async def command_help(update: Update, context: CallbackContext):
-    await update.message.reply_text(
-        "🛠 Perintah yang ada:\n"
-        "/start - Mula perbualan\n"
-        "/reset - Padam semua tetapan\n"
-        "/clear - Kosongkan chat\n"
-        "/set - Ubah setting (contoh: model)\n"
-        "/show - Lihat setting semasa\n"
-        "/help - Senarai perintah"
-    )
+    await update.message.reply_text("Hai! Saya Aleeya. Awak boleh tanya saya soalan berkaitan AirAsia Ride. 😊")
 
 def register_handlers(app):
-    app.add_handlers(handlers={
-        -1: [
-            CommandHandler('start', command_start),
-            CommandHandler('reset', command_reset),
-            CommandHandler('clear', command_clear),
-            CommandHandler('set', command_set),
-            CommandHandler('show', command_show),
-            CommandHandler('help', command_help)
-        ],
-        1: [MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)]
-    })
+    app.add_handler(CommandHandler('start', command_start))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
 def main():
     parser = argparse.ArgumentParser()
