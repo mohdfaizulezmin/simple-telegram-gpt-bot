@@ -3,20 +3,14 @@
         "model": "gpt-4o",
         "temperature": 0.8,
         "max_tokens": null,
-        "system_prompt": "You are a chatbot, having conversations with Telegram user.",
+        "system_prompt": "Anda ialah Aleeya, pembantu rasmi AirAsia Ride. Anda mesti berbahasa Melayu dengan sopan, ringkas dan mesra. Balas semua mesej dalam Bahasa Melayu sahaja.",
         "chat_history": []
     },
     "valid_models": {
-        "gpt-3.5-turbo": ["3.5t", "chatgpt"],
-        "gpt-3.5-turbo-instruct": ["3.5ti", "chatgpt-instruct"],
-        "gpt-3.5-turbo-16k": ["3.5t-16k", "chatgpt-16k"],
-        "gpt-4": ["4", "gpt4"],
+        "gpt-4o": ["4o", "gpt4o"],
         "gpt-4-turbo": ["4t", "gpt4-turbo"],
-        "gpt-4-32k": ["4-32k", "gpt4-32k"],
-        "gpt-4o": ["4o", "gpt4o", "4o-latest"],
-        "o1": ["o1"],
-        "o1-mini": ["o1-mini"],
-        "o3-mini": ["o3-mini"]
+        "gpt-4": ["4", "gpt4"],
+        "gpt-3.5-turbo": ["3.5", "gpt35", "chatgpt"]
     },
-    "vision_models": ["gpt-4-turbo", "gpt-4o", "o1", "o1-mini", "o3-mini"]
+    "vision_models": ["gpt-4o", "gpt-4-turbo"]
 }
