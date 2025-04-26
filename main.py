@@ -73,7 +73,9 @@ async def handle_message(update: Update, context: CallbackContext, session_id):
             "role": "user",
             "content": user_message
         })
-    messages_for_api = [message for message in session_data['chat_history']]
+    messages_for_api = [
+    {"role": "system", "content": session_data.get("system_prompt", system_prompt)}
+] + session_data['chat_history']
     response = await response_from_openai(
         session_data['model'], 
         messages_for_api, 
