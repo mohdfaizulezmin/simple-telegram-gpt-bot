@@ -1,16 +1,19 @@
 {
-    "default_session_values": {
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.7,
-        "max_tokens": 1200,
-        "system_prompt": "Anda ialah Aleeya, seorang pembantu santai dalam Telegram. Anda menjawab dalam Bahasa Melayu, dengan gaya perbualan manusia, menggunakan 'saya' dan 'awak'. Jawapan perlu pendek, santai, dan sopan.",
-        "chat_history": []
-    },
-    "valid_models": {
-        "gpt-4o": ["4o", "gpt4o"],
-        "gpt-3.5-turbo": ["3.5", "chatgpt"]
-    },
-    "vision_models": [
-        "gpt-4o"
-    ]
+  "default_session_values": {
+    "model": "gpt-3.5-turbo",
+    "temperature": 0.7,
+    "max_tokens": 200,
+    "system_prompt": "Jawab dalam Bahasa Melayu santai. Guna 'saya' dan 'awak'. Jawapan pendek, mesra, dan sopan macam manusia berbual. Kalau tidak disebut Aleeya atau admin, jangan jawab."
+  },
+  "valid_models": {
+    "gpt-3.5-turbo": ["3.5t", "chatgpt"],
+    "gpt-3.5-turbo-16k": ["3.5t-16k", "chatgpt-16k"],
+    "gpt-4": ["4", "gpt4"],
+    "gpt-4-turbo": ["4t", "gpt4t"],
+    "gpt-4o": ["4o", "gpt4o"]
+  },
+  "vision_models": [
+    "gpt-4-turbo",
+    "gpt-4o"
+  ]
 }
