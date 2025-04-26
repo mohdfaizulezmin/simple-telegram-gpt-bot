@@ -7,9 +7,27 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN') or exit("🚨Error: TELEGRAM_TOKEN 
 openai.api_key = os.getenv('OPENAI_API_KEY') or None
 SESSION_DATA = {}
 
+# ========== BASIC CONFIG ==========
+FAQ_KEYWORDS = {
+    "dopq": "DOPQ tu sistem giliran untuk pemandu AirAsia Ride di KLIA. Kalau awak turunkan penumpang dan kekal dalam zon, awak dapat keutamaan job.",
+    "insentif": "Insentif dibayar setiap Rabu, tapi pastikan awak cukup syarat trip dan tiada cancel atau incomplete job.",
+    "akaun bank": "Untuk tukar akaun bank, boleh hantar info dan bukti akaun ke support dalam WhatsApp atau Telegram.",
+    "tak dapat job": "Pastikan status app awak online, GPS on, dan line internet stabil. Cuba tunggu dalam zon aktif."
+}
+
+SALAM_KEYWORDS = ["salam", "assalamualaikum", "hi", "helo", "hello"]
+NAME_KEYWORDS = ["aleeya", "admin"]
+
+# ========== SESSION HELPERS ==========
 def load_configuration():
-    with open('configuration.json', 'r') as file:
-        return json.load(file)
+    return {
+        "default_session_values": {
+            "model": "gpt-3.5-turbo",
+            "temperature": 0.7,
+            "max_tokens": 500,
+            "system_prompt": ""
+        }
+    }
 
 def get_session_id(func):
     async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
@@ -20,149 +38,82 @@ def get_session_id(func):
 def initialize_session_data(func):
     async def wrapper(update: Update, context: CallbackContext, session_id, *args, **kwargs):
         if session_id not in SESSION_DATA:
-            logging.debug(f"Initializing session data for session_id={session_id}")
             SESSION_DATA[session_id] = load_configuration()['default_session_values']
+            SESSION_DATA[session_id]['chat_history'] = []
         return await func(update, context, session_id, *args, **kwargs)
     return wrapper
 
-def check_api_key(func):
-    async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
-        if not openai.api_key:
-            await update.message.reply_text("⚠️ Sila set API key: /set openai_api_key YOUR_KEY")
-            return
-        return await func(update, context, *args, **kwargs)
-    return wrapper
-
-def relay_errors(func):
-    async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
-        try:
-            return await func(update, context, *args, **kwargs)
-        except Exception as e:
-            await update.message.reply_text(f"Maaf ya, ada ralat teknikal. ({e})")
-    return wrapper
-
-def get_system_prompt():
-    return (
-        "Awak ialah Aleeya, pembantu AI kepada pemandu AirAsia Ride."
-        " Awak akan jawab dalam Bahasa Melayu, sopan dan santai."
-        " Gaya awak mesra, pendek, dalam perenggan."
-        " Awak hanya jawab kalau nama awak dipanggil, contohnya 'aleeya' atau 'admin'."
-        " Kalau tak dipanggil, diam sahaja."
-        " Fokus kepada topik e-hailing, pemandu, aplikasi, DOPQ, insentif, dan isu biasa."
-    )
-
-CONFIGURATION = load_configuration()
-VISION_MODELS = CONFIGURATION.get('vision_models', [])
-VALID_MODELS = CONFIGURATION.get('VALID_MODELS', {})
-
-@relay_errors
-@get_session_id
+# ========== BOT HANDLER ==========
 @initialize_session_data
-@check_api_key
+@get_session_id
 async def handle_message(update: Update, context: CallbackContext, session_id):
     message_text = update.message.text.lower()
-    if update.effective_chat.type in ['group', 'supergroup']:
-        if not any(name in message_text for name in ["aleeya", "admin"]):
-            return
+
+    # 🧠 Bot akan diam jika bukan panggilan nama atau bukan salam
+    mentioned = any(name in message_text for name in NAME_KEYWORDS)
+    is_salam = any(s in message_text for s in SALAM_KEYWORDS)
+
+    if not mentioned and not is_salam:
+        return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-    session_data = SESSION_DATA[session_id]
+
+    # Salam reply
+    if is_salam and not mentioned:
+        await update.message.reply_text("Waalaikumsalam. Saya ada di sini kalau awak nak tanya apa-apa ya 😊")
+        return
+
+    # Jawapan FAQ auto detect
+    for keyword in FAQ_KEYWORDS:
+        if keyword in message_text:
+            await update.message.reply_text(FAQ_KEYWORDS[keyword])
+            return
+
+    # Jika tak match FAQ, hantar ke OpenAI (dengan gaya ringkas)
     user_message = update.message.text
-
-    session_data['chat_history'].append({
-        "role": "system", "content": get_system_prompt()
-    })
-    session_data['chat_history'].append({
-        "role": "user", "content": user_message
-    })
-
-    messages_for_api = session_data['chat_history'][-10:]
+    chat_history = SESSION_DATA[session_id]['chat_history']
+    chat_history.append({"role": "user", "content": user_message})
 
     response = await response_from_openai(
-        session_data['model'], 
-        messages_for_api, 
-        session_data['temperature'], 
-        session_data['max_tokens']
+        SESSION_DATA[session_id]['model'],
+        messages=[{"role": "system", "content": "Jawab pendek, sopan dan dalam Bahasa Melayu. Guna nada perbualan santai seperti 'saya' dan 'awak'."}] + chat_history[-5:],
+        temperature=SESSION_DATA[session_id]['temperature'],
+        max_tokens=SESSION_DATA[session_id]['max_tokens']
     )
 
-    session_data['chat_history'].append({
-        'role': 'assistant',
-        'content': response
-    })
+    chat_history.append({"role": "assistant", "content": response})
     await update.message.reply_text(response)
 
 async def response_from_openai(model, messages, temperature, max_tokens):
-    params = {
-        'model': model,
-        'messages': messages,
-        'temperature': temperature,
-        'max_tokens': max_tokens or 300,
-    }
-    return openai.chat.completions.create(**params).choices[0].message.content.strip()
+    try:
+        result = openai.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+        return result.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Maaf, ada masalah teknikal sebentar: {e}"
 
-async def command_start(update: Update, context: CallbackContext):
-    await update.message.reply_text("Hi! Saya Aleeya, pembantu AI untuk pemandu AirAsia Ride. Tulis 'aleeya' atau 'admin' kalau perlukan bantuan ya 😊")
-
-@get_session_id
-async def command_reset(update: Update, context: CallbackContext, session_id):
-    if session_id in SESSION_DATA:
-        del SESSION_DATA[session_id]
-    await update.message.reply_text("✅ Semua data sesi dah dipadam. Awak boleh mula semula sekarang.")
-
-@get_session_id
-async def command_clear(update: Update, context: CallbackContext, session_id):
-    if session_id in SESSION_DATA:
-        SESSION_DATA[session_id]['chat_history'] = []
-    await update.message.reply_text("✅ Chat history dah kosong.")
-
-@get_session_id
-@initialize_session_data
-async def command_set(update: Update, context: CallbackContext, session_id):
-    args = context.args
-    if not args:
-        await update.message.reply_text("⚠️ Sila nyatakan apa yang nak diubah.")
-        return
-    preference, *rest = args
-    value = ' '.join(rest)
-    SESSION_DATA[session_id][preference] = value
-    await update.message.reply_text(f"✅ {preference} telah ditetapkan ke: {value}")
-
-@get_session_id
-async def command_show(update: Update, context: CallbackContext, session_id):
-    session_data = SESSION_DATA.get(session_id, {})
-    if not session_data:
-        await update.message.reply_text("Tiada data sesi buat masa ini.")
-        return
-    reply = "\n".join([f"{k}: {v}" for k, v in session_data.items() if k != 'chat_history'])
-    await update.message.reply_text(f"**Maklumat sesi:**\n{reply}")
-
-def register_handlers(application):
-    application.add_handlers(handlers={
-        -1: [
-            CommandHandler('start', command_start),
-            CommandHandler('reset', command_reset),
-            CommandHandler('clear', command_clear),
-            CommandHandler('set', command_set),
-            CommandHandler('show', command_show),
-        ],
-        1: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)]
-    })
+# ========== RAILWAY & MAIN ==========
+def register_handlers(app):
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
 def railway_dns_workaround():
     from time import sleep
-    sleep(1.3)
     for _ in range(3):
         try:
             if requests.get("https://api.telegram.org", timeout=3).status_code == 200:
                 return
         except:
-            pass
-
+            sleep(1)
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--debug', action='store_true')
     args = parser.parse_args()
+
     if args.debug:
         logging.basicConfig(level=logging.DEBUG)
     else:
@@ -171,6 +122,7 @@ def main():
     railway_dns_workaround()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     register_handlers(app)
+    print("Bot is running in long polling mode...")
     app.run_polling()
 
 if __name__ == '__main__':
