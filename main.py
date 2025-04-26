@@ -22,6 +22,9 @@ def initialize_session_data(func):
         if session_id not in SESSION_DATA:
             logging.debug(f"Initializing session data for session_id={session_id}")
             SESSION_DATA[session_id] = load_configuration()['default_session_values']
+            SESSION_DATA[session_id]['chat_history'] = [
+                {"role": "system", "content": system_prompt}
+            ]
         else:
             logging.debug(f"Session data already exists for session_id={session_id}")
         logging.debug(f"SESSION_DATA[{session_id}]: {SESSION_DATA[session_id]}")
@@ -44,10 +47,6 @@ def relay_errors(func):
             await update.message.reply_text(f"An error occurred. e: {e}")
     return wrapper
 
-CONFIGURATION = load_configuration()
-VISION_MODELS = CONFIGURATION.get('vision_models', [])
-VALID_MODELS = CONFIGURATION.get('VALID_MODELS', {})
-
 system_prompt = """
 Anda ialah ejen sokongan rasmi untuk pemandu AirAsia Ride. Jawapan anda mesti:
 - Ringkas, padat, dan mudah difahami
@@ -55,39 +54,17 @@ Anda ialah ejen sokongan rasmi untuk pemandu AirAsia Ride. Jawapan anda mesti:
 - Fokus kepada topik berkaitan pemandu, aplikasi, insentif, dan isu sokongan
 
 Berikut adalah soalan lazim dan jawapannya:
-1. Apa itu DOPQ?
-DOPQ bermaksud Drop-off Priority Queue. Ia membolehkan pemandu dapat keutamaan giliran selepas turunkan penumpang di KLIA/KLIA2 jika mereka kekal dalam zon selama 30 minit.
-
-2. Kenapa saya hilang DOPQ?
-Jika anda keluar dari zon airport lebih 30 minit, sistem akan keluarkan anda dari DOPQ dan masuk ke giliran biasa (ACQ).
-
-3. Kenapa saya tak dapat job walaupun ada dalam giliran?
-Pastikan anda aktif dalam app (status Online), lokasi GPS tepat, dan tiada gangguan rangkaian.
-
-4. Kenapa tak dapat insentif minggu ini?
-Pastikan anda capai syarat trip, tiada incomplete job, cancel trip, atau laporan pelanggan.
-
-5. Bila insentif dibayar?
-Insentif dibayar setiap Rabu (atau selewatnya Khamis jika cuti umum).
-
-6. Bagaimana nak tukar akaun bank?
-Hantar maklumat akaun baru ke support melalui WhatsApp atau Telegram rasmi bersama bukti akaun.
-
-7. Apps problem — tak dapat login atau loading slow
-Sila tutup app, update ke versi terbaru, dan guna internet stabil. Kalau masih bermasalah, guna butang "Lapor Isu" dalam app.
-
-8. Ada komisen ke?
-Ya. Komisen standard 15% untuk setiap trip, tidak termasuk SST.
-
-9. Nak cuti, kena buat apa?
-Hanya perlu off-kan app. Tiada permohonan rasmi. Tapi lebih 14 hari tiada trip, sistem akan klasifikasikan tidak aktif.
-
-10. Bagaimana nak aktifkan semula akaun?
-Hubungi team sokongan melalui Telegram atau WhatsApp.
-
-11. Masalah topup eWallet?
-Semak transaksi dalam apps > Wallet. Jika tiada, hantar bukti transfer kepada support.
+1. Apa itu DOPQ? DOPQ ialah Drop-off Priority Queue. Ia beri keutamaan kepada pemandu yang kekal di zon KLIA selepas turunkan penumpang.
+2. Kenapa saya hilang DOPQ? Anda keluar dari zon lebih 30 minit.
+3. Bila insentif dibayar? Setiap Rabu (atau Khamis jika cuti umum).
+4. Masalah login atau app? Tutup & buka semula app, pastikan internet stabil.
+5. Nak cuti? Off-kan app sahaja. Akaun aktif semula bila terima trip.
+6. Tukar akaun bank? Hubungi support & sertakan bukti akaun.
 """
+
+CONFIGURATION = load_configuration()
+VISION_MODELS = CONFIGURATION.get('vision_models', [])
+VALID_MODELS = CONFIGURATION.get('VALID_MODELS', {})
 
 @relay_errors
 @get_session_id
@@ -98,30 +75,35 @@ async def handle_message(update: Update, context: CallbackContext, session_id):
     session_data = SESSION_DATA[session_id]
     user_message = update.message.text
     session_data['chat_history'].append({"role": "user", "content": user_message})
-
-    messages_for_api = [
-        {"role": "system", "content": session_data.get("system_prompt", system_prompt)}
-    ] + session_data['chat_history']
-
-    response = await response_from_openai(
-        session_data['model'], messages_for_api,
-        session_data['temperature'], session_data['max_tokens']
-    )
-    session_data['chat_history'].append({'role': 'assistant', 'content': response})
+    response = await response_from_openai(session_data['model'], session_data['chat_history'], session_data['temperature'], session_data['max_tokens'])
+    session_data['chat_history'].append({"role": "assistant", "content": response})
     await update.message.reply_markdown(response)
 
 async def response_from_openai(model, messages, temperature, max_tokens):
-    params = {'model': 'gpt-3.5-turbo', 'messages': messages, 'temperature': temperature}  # model paling murah
+    params = {'model': model, 'messages': messages, 'temperature': temperature}
+    if model == "gpt-4-vision-preview":
+        max_tokens = 4096
     if max_tokens is not None:
         params['max_tokens'] = max_tokens
     return openai.chat.completions.create(**params).choices[0].message.content
 
 async def command_start(update: Update, context: CallbackContext):
-    await update.message.reply_text("ℹ️ Selamat datang! Tanyakan saja apa-apa soalan berkaitan pemandu AirAsia Ride.")
+    await update.message.reply_text("Selamat datang ke sokongan pemandu AirAsia Ride. Saya sedia bantu!")
 
-def register_handlers(application):
-    application.add_handlers(handlers={
-        -1: [CommandHandler('start', command_start)],
+@get_session_id
+async def command_reset(update: Update, context: CallbackContext, session_id):
+    if session_id in SESSION_DATA:
+        del SESSION_DATA[session_id]
+        await update.message.reply_text("ℹ️ Reset berjaya.")
+    else:
+        await update.message.reply_text("Tiada data untuk direset.")
+
+def register_handlers(app):
+    app.add_handlers(handlers={
+        -1: [
+            CommandHandler('start', command_start),
+            CommandHandler('reset', command_reset),
+        ],
         1: [MessageHandler(filters.ALL & (~filters.COMMAND), handle_message)]
     })
 
@@ -131,22 +113,27 @@ def railway_dns_workaround():
     for _ in range(3):
         try:
             if requests.get("https://api.telegram.org", timeout=3).status_code == 200:
-                print("The api.telegram.org is reachable.")
+                print("Telegram API reachable.")
                 return
-        except:
-            pass
-        print(f'Retrying...({_})')
-    print("Failed to reach api.telegram.org after 3 attempts.")
+        except: pass
+        print("Retrying...")
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--debug', action='store_true')
     args = parser.parse_args()
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.WARNING)
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.disable(logging.WARNING)
     railway_dns_workaround()
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    register_handlers(application)
-    application.run_polling()
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    register_handlers(app)
+    try:
+        print("Bot is running...")
+        app.run_polling()
+    except Exception as e:
+        logging.error(f"Runtime error: {e}")
 
 if __name__ == '__main__':
     main()
